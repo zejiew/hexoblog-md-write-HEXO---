@@ -1,0 +1,13 @@
+{
+  "_说明": "把本文件复制为 config.local.json，填你自己的图床地址和认证码。此文件已被 .gitignore 忽略，不会提交。",
+  "imgbedBase": "https://img.example.com",
+  "authCode": "your-auth-code",
+
+  "_其他可选": {
+    "port": 8787,
+    "blogRoot": "",
+    "postsDir": "source/_posts",
+    "uploadChannel": "telegram",
+    "returnFormat": "full"
+  }
+}

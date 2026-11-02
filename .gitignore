@@ -1,0 +1,12 @@
+# 依赖（本项目零依赖，但防止误装）
+node_modules/
+package-lock.json
+yarn.lock
+
+# 本地私有配置：你的图床地址、认证码都在这里，绝不提交
+config.local.json
+
+# 运行时产物
+*.log
+.DS_Store
+Thumbs.db
