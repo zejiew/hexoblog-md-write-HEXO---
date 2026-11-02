@@ -111,6 +111,11 @@ function querySelectorAll(sel) {
 const BASE = process.env.MDW_BASE || 'http://127.0.0.1:8787';
 const fetchRel = (u, o) => fetch(String(u).startsWith('http') ? u : BASE + u, o);
 
+/** 启动时服务端已有的配置，用来验证「配置一次，之后自动接管」 */
+const cfgPromise = fetchRel('/api/config')
+  .then((r) => r.json())
+  .catch(() => ({}));
+
 const store = new Map();
 const sandbox = {
   console,
@@ -167,7 +172,7 @@ try {
 }
 
 // 让 init() 里的 await 链跑完
-setTimeout(() => {
+setTimeout(async () => {
   if (missing.length) {
     console.log('✘ 引用了 index.html 里不存在的选择器：');
     console.log('   ' + [...new Set(missing)].join(', '));
@@ -179,5 +184,22 @@ setTimeout(() => {
     process.exitCode = 1;
   } else {
     console.log('✔ app.js 在最小 DOM 下完成了 init()，无异常');
+  }
+
+  // 「配置一次」：服务端 config.local.json 里已有的值，应当自动接管到界面设置里
+  const cfg = await cfgPromise;
+  if (!cfg || !cfg.imgbedBase) {
+    console.log('· 服务端还没有保存过配置，跳过「配置记忆」检查（在界面里保存一次再跑）');
+    return;
+  }
+  const gotBase = store.get('mdw:imgbedBase');
+  const gotAuth = store.get('mdw:authCode');
+  const okBase = gotBase === cfg.imgbedBase;
+  const okAuth = !cfg.authCode || gotAuth === cfg.authCode;
+  if (okBase && okAuth) {
+    console.log('✔ 服务端已保存的图床配置自动接管成功' + (cfg.authCode ? '（含认证码）' : ''));
+  } else {
+    console.log('✘ 服务端配置没有接管：图床地址=' + gotBase + ' 认证码=' + gotAuth);
+    process.exitCode = 1;
   }
 }, 900);

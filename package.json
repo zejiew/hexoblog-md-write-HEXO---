@@ -1,6 +1,6 @@
 {
   "name": "hexo-imgbed-writer",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "本地 Markdown 写作台：粘贴或拖入图片即自动上传到 CloudFlare-ImgBed，并把链接插回正文；直接读写 Hexo 文章目录，一键生成部署。",
   "main": "server.js",
   "bin": {

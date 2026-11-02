@@ -291,12 +291,12 @@
       <div class="row">
         <label for="cfg-imgbed">图床地址</label>
         <input id="cfg-imgbed" type="url" placeholder="https://你的图床域名" autocomplete="off" spellcheck="false">
-        <div class="hint" id="cfg-imgbed-hint">填 CloudFlare-ImgBed 的站点根地址，例如 <code>https://img.example.com</code>，不要带 <code>/upload</code>。只保存在本机浏览器里。</div>
+        <div class="hint" id="cfg-imgbed-hint">填 CloudFlare-ImgBed 的站点根地址，例如 <code>https://img.example.com</code>，不要带 <code>/upload</code>。保存后会写进本机的 <code>config.local.json</code>，下次启动不用再填。</div>
       </div>
       <div class="row">
         <label for="cfg-authcode">上传认证码</label>
         <input id="cfg-authcode" type="password" placeholder="图床后台设置的认证码，没有就留空" autocomplete="off">
-        <div class="hint">只保存在本机浏览器里，上传时随请求发送。</div>
+        <div class="hint">只需填一次：存在本机 <code>config.local.json</code> 里，不会提交到 git，上传时随请求发送。</div>
       </div>
       <div class="row">
         <label for="cfg-format">插入格式</label>

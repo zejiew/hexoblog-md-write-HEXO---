@@ -80,6 +80,49 @@ function loadConfig() {
 
 let CONFIG = loadConfig();
 
+const LOCAL_CONFIG = path.join(ROOT, 'config.local.json');
+
+/** 返回给本机界面的配置（服务只监听 127.0.0.1，认证码用于设置面板回填） */
+function publicConfig() {
+  return {
+    imgbedBase: CONFIG.imgbedBase,
+    authCode: CONFIG.authCode,
+    uploadChannel: CONFIG.uploadChannel,
+    returnFormat: CONFIG.returnFormat,
+    imageInsertFormat: CONFIG.imageInsertFormat,
+    postsDir: CONFIG.postsDir,
+    authCodeConfigured: Boolean(CONFIG.authCode),
+  };
+}
+
+/**
+ * 把界面上的设置写进 config.local.json。
+ * 这样「配置一次」就够了：换端口、换浏览器、清掉站点数据之后依然有效，
+ * 因为值存在磁盘上而不是 localStorage 里。该文件已在 .gitignore 中。
+ */
+async function saveLocalConfig(patch) {
+  let current = {};
+  if (fs.existsSync(LOCAL_CONFIG)) {
+    try {
+      current = JSON.parse(fs.readFileSync(LOCAL_CONFIG, 'utf8').replace(/^\uFEFF/, '')) || {};
+    } catch {
+      throw new Error('config.local.json 不是合法 JSON（可能写了注释或少了引号），请先修好再保存');
+    }
+  }
+  const next = { ...current };
+  const keys = ['imgbedBase', 'authCode', 'uploadChannel', 'returnFormat', 'imageInsertFormat'];
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(patch, key)) {
+      next[key] = patch[key] == null ? '' : String(patch[key]);
+    }
+  }
+  if ('imgbedBase' in next) next.imgbedBase = String(next.imgbedBase).trim().replace(/\/+$/, '');
+  if ('authCode' in next) next.authCode = String(next.authCode).trim();
+  await fsp.writeFile(LOCAL_CONFIG, JSON.stringify(next, null, 2) + '\n', 'utf8');
+  CONFIG = loadConfig();
+  return next;
+}
+
 /* ------------------------------------------------------------------ */
 /* 定位博客根目录                                                       */
 /* ------------------------------------------------------------------ */
@@ -461,14 +504,30 @@ async function handleApi(req, res, url) {
     });
   }
 
+  if (p === '/api/config' && req.method === 'POST') {
+    const raw = await readBody(req, 64 * 1024);
+    let patch;
+    try {
+      patch = JSON.parse(raw.toString('utf8') || '{}');
+    } catch {
+      return sendJson(res, 400, { error: '请求体不是合法 JSON' });
+    }
+    const base = String(patch.imgbedBase || '').trim();
+    if (base && !/^https?:\/\//i.test(base)) {
+      return sendJson(res, 400, { error: '图床地址必须以 http:// 或 https:// 开头：' + base });
+    }
+    try {
+      await saveLocalConfig(patch);
+    } catch (err) {
+      return sendJson(res, 500, {
+        error: '写入 config.local.json 失败：' + err.message + '（设置仍保存在本机浏览器里）',
+      });
+    }
+    return sendJson(res, 200, { ok: true, saved: true, file: 'config.local.json', config: publicConfig() });
+  }
+
   if (p === '/api/config') {
-    return sendJson(res, 200, {
-      imgbedBase: CONFIG.imgbedBase,
-      postsDir: CONFIG.postsDir,
-      returnFormat: CONFIG.returnFormat,
-      imageInsertFormat: CONFIG.imageInsertFormat,
-      authCodeConfigured: Boolean(CONFIG.authCode),
-    });
+    return sendJson(res, 200, publicConfig());
   }
 
   if (p === '/api/posts' && req.method === 'GET') {

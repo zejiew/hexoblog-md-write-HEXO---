@@ -1,12 +1,26 @@
 # 写作台 · Markdown + 自建图床
 
-一个跑在本机的 Markdown 写稿工具。**粘贴或拖入图片 → 自动上传到你的图床 → 链接直接落回光标处**，写完点一下就能生成并发布博客。
+一个跑在本机的 Markdown 写稿工具，给写 Hexo 博客的人用。**粘贴或拖入图片 → 自动上传到你的图床 → 链接直接落回光标处**，写完点一下就能生成并发布。
 
-为 [Hexo](https://hexo.io/) 设计（直接读写 `source/_posts`、一键 `hexo clean && hexo g -d`），图床端对接 [CloudFlare-ImgBed](https://github.com/MarSeventh/CloudFlare-ImgBed)（也就是 Sanyue ImgHub）。
+```
+剪贴板截图 / 拖进来的图片
+        │
+        ▼
+  本机上跑的小服务  ──POST──▶  你自己的图床（CloudFlare-ImgBed）
+        │                        │
+        └────  ![名字](链接)  ◀───┘   直接插进正文
+```
 
-- **零依赖**：只要 Node.js 18+，不用 `npm install`，不连任何 CDN
-- **图片不落地**：剪贴板里的截图直接进图床，博客仓库里不留一堆 `images/` 文件夹
-- **图床随便换**：地址和认证码都填在你自己的机器上（浏览器 localStorage 或本地配置文件），仓库里是空的
+适合谁：用 Hexo（或任何「`source/_posts` 下一堆 .md」的博客）、想给文章配图、又不想手动开图床网页上传再复制链接的人。
+
+- **零依赖**：只要 Node.js 18+，不用 `npm install`，不连任何 CDN，断网也能写
+- **图片不落地**：截图直接进图床，博客仓库里不会多出一堆 `images/` 文件夹
+- **图床是你自己的**：地址和认证码填在你自己机器上，代码里是空的，谁 clone 都不会带着别人的图床
+- **配置一次就够**：填完保存进本机 `config.local.json`，下次启动、换端口、换浏览器都不用再填
+
+目录：
+
+- [功能](#功能) · [快速开始](#快速开始) · [接入你自己的图床](#接入你自己的图床) · [文章属性](#文章属性front-matter) · [配置项](#配置项) · [常见问题](#常见问题)
 
 ---
 
@@ -43,7 +57,7 @@
    sh tools/md-writer/start.sh
    ```
 
-3. 浏览器会打开 `http://127.0.0.1:8787/`。第一次进去先点右上角 ⚙️ **设置**，填图床地址（见下一节）
+3. 浏览器会打开 `http://127.0.0.1:8787/`。**第一次**进去点右上角 ⚙️ **设置**，填图床地址和认证码 → 保存。之后就再也不用了（见下一节）
 
 控制台会打印实际地址和它找到的博客目录：
 
@@ -89,15 +103,18 @@ node server.js --blog /home/me/blog --port 8899
 
 > 图床后台如果**没有**设置认证码，这里就留空；设置了就必须填对，否则上传返回 `401`。
 
-### 3. 填进写作台
+### 3. 填进写作台（只填一次）
 
-两种方式，任选其一（**推荐第一种**，改起来不用重启）：
+右上角 ⚙️ 设置 → 图床地址 / 上传认证码 → **保存**。
 
-**A. 界面里填**（存浏览器 localStorage，只影响你这台机器）
+保存会同时做两件事，所以「配置一次」是字面意思：
 
-右上角 ⚙️ 设置 → 图床地址 / 上传认证码 → 保存。
+| 存到哪 | 作用 |
+| --- | --- |
+| 浏览器 localStorage | 当前这个页面立刻生效 |
+| 本机 `config.local.json` | 下次启动自动读取——换端口（8788/8789…）、换浏览器、清掉站点数据都不影响 |
 
-**B. 写进配置文件**（适合固定环境，也让 curl 调接口时能直接用）
+`config.local.json` 是在你第一次保存时自动生成的，**已在 `.gitignore` 里，不会被提交**。也可以在启动前自己写（适合固定环境、或者你想让 `curl` 直接调接口）：
 
 ```bash
 cp config.local.example.json config.local.json
@@ -110,8 +127,7 @@ cp config.local.example.json config.local.json
 }
 ```
 
-`config.local.json` 已在 `.gitignore` 里，不会被提交。
-优先级：**界面设置 > `config.local.json` > `config.json`**。改完配置文件需要重启服务（或访问 `http://127.0.0.1:8787/api/reload`）。
+优先级：**界面设置 > `config.local.json` > `config.json`**。手改配置文件后需重启服务（或访问 `http://127.0.0.1:8787/api/reload`）；从界面保存则立即生效、无需重启。
 
 ### 4. 验证
 
@@ -167,6 +183,8 @@ cp config.local.example.json config.local.json
 | `blogRoot` | 博客根目录；留空则自动向上查找 |
 | `postsDir` | 文章目录，相对博客根目录；非 Hexo 的纯 Markdown 博客改这里即可 |
 | `imageInsertFormat` | 默认插入格式，界面上还能再改 |
+
+> 在界面「设置」里保存时，只会把这几个跟图床有关的键（`imgbedBase`、`authCode`、`imageInsertFormat`）写进 `config.local.json`，其他键原样保留。这个文件必须是**合法 JSON**（不能写 `//` 注释）；万一格式坏了，保存会直接报错、不会把你的配置覆盖掉。
 
 ---
 
@@ -278,7 +296,8 @@ Content-Type: multipart/form-data
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/ping` | 服务状态、博客目录、图床地址、认证码是否配好 |
-| GET | `/api/config` | 前端用的配置 |
+| GET | `/api/config` | 前端用的配置（含本机已保存的图床地址与认证码） |
+| POST | `/api/config` | `{ imgbedBase, authCode, imageInsertFormat }` 写进 `config.local.json`，立刻生效 |
 | GET | `/api/posts` | 文章列表 |
 | GET | `/api/post?name=xxx.md` | 读一篇文章 |
 | POST | `/api/post` | `{ name, content, overwrite }` 写一篇文章 |
@@ -306,6 +325,8 @@ curl -X POST http://127.0.0.1:8787/api/upload \
 - 日期没改动就沿用原文件的写法（含时分秒，避免 Hexo 排序被打乱）
 - 保存前想确认，`git diff` 一眼就够
 
+关于认证码：它存在本机 `config.local.json` 里（明文），该文件已被 `.gitignore` 忽略；服务只监听 `127.0.0.1`。**不要**把 `config.local.json` 提交到公开仓库，也不要把服务开到公网。
+
 已知的轻微规范化：原文件里**空值**的 key（例如光秃秃一行 `tags:`）保存时会被省略，对 Hexo 行为没有影响。
 
 ---
@@ -316,7 +337,7 @@ curl -X POST http://127.0.0.1:8787/api/upload \
 md-writer/
 ├─ server.js                本地服务：静态页 + 图床代理 + 读写 _posts + 调 hexo
 ├─ config.json              默认配置（可提交）
-├─ config.local.json        本地覆盖：图床地址、认证码（已 gitignore）
+├─ config.local.json        你保存设置后自动生成：图床地址、认证码（已 gitignore）
 ├─ config.local.example.json 上面那个的模板
 ├─ 启动写作台.bat            Windows 双击启动
 ├─ start.sh                 macOS / Linux 启动
@@ -350,6 +371,12 @@ node server.js --blog "D:\my-blog"
 **上传转圈很久后失败**
 图床在 Cloudflare 上，跨境访问偶尔慢，服务端超时 90 秒。先试试图床网页版能不能传。
 
+**换了个端口，设置还在吗**
+在。图床地址、认证码、插入格式都存在 `config.local.json`，跟着机器走，与浏览器、端口都无关。只有「自动复制链接 / 自动保存草稿」这两个开关存在浏览器里。
+
+**想把配置发给别人 / 提交到公开仓库**
+只发代码，别发 `config.local.json`（它已经在 `.gitignore` 里）。对方的图床应该由对方自己填一次。
+
 **端口打不开 / 白屏**
 看控制台打印的实际端口；确认没有另一个 `node server.js` 还在跑。
 
@@ -376,7 +403,7 @@ node test/dom-smoke.js        # 最小 DOM 里跑完 init()，抓选择器拼错
 node test/fm-roundtrip.js "D:\my-blog\source\_posts"
 ```
 
-`dom-smoke.js` 需要服务已启动（默认 `http://127.0.0.1:8787`，可用环境变量 `MDW_BASE` 改）。
+`dom-smoke.js` 需要服务已启动（默认 `http://127.0.0.1:8787`，可用环境变量 `MDW_BASE` 改）。如果服务端已经保存过图床配置，它还会顺带验证「配置一次」这条路径：`config.local.json` 里的值应当自动接管到界面设置里。
 
 ---
 

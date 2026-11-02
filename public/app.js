@@ -77,6 +77,33 @@
   /** 生效的图床地址：本机设置优先，其次服务端 config */
   const imgbedBase = () => (settings.imgbedBase || state.cfg?.imgbedBase || '').replace(/\/+$/, '');
 
+  /** 生效的认证码：同样本机优先，其次服务端 config.local.json 里存的 */
+  const authCode = () => settings.authCode || state.cfg?.authCode || '';
+
+  /**
+   * 服务端起得来、配置里已经有图床地址时，直接接管到本地设置里。
+   * 这样「配置一次」跨端口、跨浏览器都成立（值在 config.local.json 里）。
+   */
+  function adoptServerConfig() {
+    let changed = false;
+    if (!settings.imgbedBase && state.cfg?.imgbedBase) {
+      settings.imgbedBase = String(state.cfg.imgbedBase).replace(/\/+$/, '');
+      localStorage.setItem(LS.imgbed, settings.imgbedBase);
+      changed = true;
+    }
+    if (!settings.authCode && state.cfg?.authCode) {
+      settings.authCode = String(state.cfg.authCode);
+      localStorage.setItem(LS.auth, settings.authCode);
+      changed = true;
+    }
+    if (!localStorage.getItem(LS.format) && state.cfg?.imageInsertFormat) {
+      settings.format = state.cfg.imageInsertFormat;
+      localStorage.setItem(LS.format, settings.format);
+      changed = true;
+    }
+    return changed;
+  }
+
   /* ---------------------------------------------------------------- */
   /* 工具                                                              */
   /* ---------------------------------------------------------------- */
@@ -671,7 +698,7 @@
       'X-File-Type': file.type || 'application/octet-stream',
       'X-Imgbed-Base': base,
     };
-    if (settings.authCode) headers['X-Auth-Code'] = settings.authCode;
+    if (authCode()) headers['X-Auth-Code'] = authCode();
 
     const res = await fetch(`/api/upload?name=${encodeURIComponent(file.name || '')}`, {
       method: 'POST',
@@ -973,8 +1000,8 @@
   /* ---------------------------------------------------------------- */
 
   function openSettings() {
-    $('#cfg-imgbed').value = settings.imgbedBase || state.cfg?.imgbedBase || '';
-    $('#cfg-authcode').value = settings.authCode;
+    $('#cfg-imgbed').value = imgbedBase();
+    $('#cfg-authcode').value = authCode();
     $('#cfg-format').value = settings.format;
     $('#cfg-autocopy').checked = settings.autocopy;
     $('#cfg-autosave').checked = settings.autosave;
@@ -986,7 +1013,7 @@
     $('#settings-mask').hidden = true;
   }
 
-  function saveSettings() {
+  async function saveSettings() {
     let base = $('#cfg-imgbed').value.trim().replace(/\/+$/, '');
     if (base && !/^https?:\/\//i.test(base)) base = 'https://' + base;
     settings.imgbedBase = base;
@@ -1003,7 +1030,31 @@
 
     closeSettings();
     paintImgbedState();
-    toast(settings.imgbedBase ? '设置已保存' : '设置已保存（图床地址为空）', 'ok');
+
+    // 同时写进服务端的 config.local.json：下次启动、换端口、换浏览器都不用再填
+    if (!base) {
+      toast('设置已保存（图床地址为空）', 'ok');
+      return;
+    }
+    const handle = toast('正在保存到本机…', 'busy');
+    try {
+      const res = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imgbedBase: base,
+          authCode: settings.authCode,
+          imageInsertFormat: settings.format,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (data.config) state.cfg = { ...state.cfg, ...data.config };
+      updateToast(handle, '已保存，下次启动自动生效', 'ok');
+      paintImgbedState();
+    } catch (err) {
+      updateToast(handle, '已保存到浏览器，但写入 config.local.json 失败：' + err.message, 'error');
+    }
   }
 
   function applyTheme(theme) {
@@ -1242,7 +1293,7 @@
   let pingInfo = {};
   function paintImgbedState() {
     const base = imgbedBase();
-    const hasCode = Boolean(pingInfo.authCodeConfigured || settings.authCode);
+    const hasCode = Boolean(authCode());
 
     if (!base) {
       el.imgbedState.textContent = '未配置图床';
@@ -1274,6 +1325,7 @@
     } catch {
       state.cfg = {};
     }
+    adoptServerConfig();
 
     try {
       const res = await fetch('/api/ping');
@@ -1290,7 +1342,7 @@
       toast('没找到博客目录，无法读写文章（可用 --blog 指定）', 'error', 6000);
     } else if (pingInfo.ok && !imgbedBase()) {
       setTimeout(() => toast('还没配置图床地址，点右上角齿轮填写', 'error', 5000), 400);
-    } else if (pingInfo.ok && !pingInfo.authCodeConfigured && !settings.authCode) {
+    } else if (pingInfo.ok && !authCode()) {
       toast('图床地址已就绪；若上传提示 401，到设置里填认证码', 'info', 4500);
     }
 
