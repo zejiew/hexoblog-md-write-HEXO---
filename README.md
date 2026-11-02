@@ -19,7 +19,8 @@
 | 实时预览 | marked 渲染，参数按 `hexo-renderer-marked` 默认值（`gfm`/`breaks`/`headerIds`/`mangle`）设置，预览≈站点实际效果 |
 | 贴图上传 | 三种方式：Ctrl+V 粘贴截图、把图片拖进编辑区、点工具栏「插入图片」 |
 | 插入格式 | `![alt](url)` / `<img src>` / 纯链接，设置里可切换；可勾选「上传后自动复制链接」 |
-| 工具栏 | H1–H3、粗体/斜体/删除线、引用、有序无序列表、行内代码、代码块、链接、表格、分割线 |
+| 工具栏 | H1–H3、粗体/斜体/删除线、引用、有序无序列表、行内代码、代码块、链接、表格、分割线、`<!-- more -->` |
+| 文章属性 | meta 栏下面的「文章属性」折叠面板，26 个 front-matter 字段图形化填写：封面图 / 顶部图可直接上传 + 一键互转，摘要一键从正文生成，页面开关（评论、目录、版权、MathJax…）、首页轮播与推荐序号 |
 | 视图 | 编辑 / 分栏 / 纯预览 三态，滚动同步 |
 | 发布 | 先保存当前文章，再执行 `hexo clean && hexo generate -d`，构建日志在右下角抽屉里实时滚动 |
 | 草稿保护 | 每 3 秒把未保存内容存 localStorage，误关页面后下次打开可恢复 |
@@ -180,6 +181,41 @@ cp config.local.example.json config.local.json
 | `Tab` | 缩进两空格（有选区时给每行加缩进） |
 | `Ctrl+V` | 剪贴板里是图片就直接上传 |
 | `Esc` | 关闭设置弹窗 |
+
+---
+
+## 文章属性（front-matter）
+
+meta 栏下面的 **文章属性** 按钮展开一块面板，覆盖 [AnZhiYu 主题文档](https://blog-anzhiyu.pages.dev/anzhiyu-docs/page-configuration.html) 里 Post Front-matter 的全部字段。不用背字段名，填表就行；留空的字段不会写进文件，等于用主题默认值。
+
+> 这套字段是按 AnZhiYu 整理的，换成别的 Hexo 主题也能用——不认识的字段主题会忽略，只是不起作用而已。想加自己主题的字段，改 `public/app.js` 顶部的 `FIELDS` 表即可（一条记录 = 一个字段名 + 类型）。
+
+| 字段 | 作用 |
+| --- | --- |
+| `title` / `date` | 标题、发布日期（改了日期会保留原来的时分秒） |
+| `tags` / `categories` | 标签、分类，逗号分隔；写回时变成 `["a", "b"]` |
+| `updated` | 最后更新日期，不填主题就用页面构建时间 |
+| `keywords` | SEO 关键词 |
+| `description` | 摘要，首页卡片和 meta description 用它；面板里有「从正文生成」 |
+| `cover` | 首页卡片缩略图。也可填 `false` 强制不显示 |
+| `top_img` | 文章页顶部大图。也可填 `false` 关掉 |
+| `comments` / `toc` / `toc_number` / `toc_style_simple` | 评论、目录、目录编号、简洁目录 |
+| `copyright` 及 `copyright_author` / `_href` / `copyright_url` / `copyright_info` | 版权模块开关与作者、原文链接、声明 |
+| `aside` | 侧边栏 |
+| `mathjax` / `katex` | 公式渲染，二选一 |
+| `highlight_shrink` | 代码块默认折叠 |
+| `aplayer` | 音乐播放器 |
+| `swiper_index` | 首页轮播序号，数字越小越靠前 |
+| `top_group_index` | 首页推荐卡片组序号 |
+| `background` | 文章页背景色，如 `#eef2f6` |
+
+「页面开关」那几项是三态的：**默认**（不写字段，跟主题配置走）、**开**、**关**。
+
+封面图和顶部图都有「上传」按钮，选完图片直接传图床、把链接填进对应字段，下面还会显示缩略图预览；「→顶部 / →封面」可以把一个地址复制给另一个。
+
+保存时字段顺序保持你原文件的样子，新增的字段按上表顺序追加。面板里没覆盖的字段（比如 `permalink`、`aplayer` 之外的插件字段）**不会被吃掉**，会原样留在 front-matter 里。
+
+> 兼容性：有些编辑器保存时会加 UTF-8 BOM，或者丢了开头那行 `---`。写作台对这两种情况都能正确读出 front-matter，保存时顺手写成标准格式。
 
 ---
 

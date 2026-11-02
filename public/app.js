@@ -17,6 +17,7 @@
     theme: 'mdw:theme',
     last: 'mdw:lastFile',
     view: 'mdw:view',
+    attr: 'mdw:attrOpen',
   };
 
   const el = {
@@ -43,6 +44,10 @@
     buildDrawer: $('#build-drawer'),
     buildLog: $('#build-log'),
     buildState: $('#build-state'),
+    attrPanel: $('#attr-panel'),
+    btnAttr: $('#btn-attr'),
+    attrCount: $('#attr-count'),
+    attrSummary: $('#attr-summary'),
   };
 
   const state = {
@@ -52,7 +57,9 @@
     dirty: false,
     saving: false,
     extras: '',         // 未知的 front-matter 原文
+    order: [],          // 已知字段在原文件里的出现顺序
     dateRaw: '',        // 文件里原始的 date 字符串（含时分秒）
+    pickTarget: null,   // 正在为哪个字段选图（cover / top_img）
     uploading: 0,
     view: localStorage.getItem(LS.view) || 'split',
     buildSeq: 0,
@@ -141,78 +148,365 @@
   };
 
   /* ---------------------------------------------------------------- */
-  /* front-matter 解析 / 生成                                          */
+  /* front-matter：字段表 + 纯函数解析 / 生成                          */
   /* ---------------------------------------------------------------- */
+  /* 字段按 AnZhiYu 主题文档「页面配置 → Post Front-matter」整理。
+     type 决定读文件时怎么解释、写回时怎么输出；表里没有的字段原样留在 extras 里，
+     保存时按原文回写，不会被吃掉。 */
 
-  // 只接管这些字段；其余（如 updated、permalink、cover…）原样留在 extras 里回写
-  const KNOWN = ['title', 'date', 'tags', 'categories'];
+  const FIELDS = [
+    { key: 'title', type: 'str' },
+    { key: 'date', type: 'date' },
+    { key: 'updated', type: 'str' },
+    { key: 'tags', type: 'list' },
+    { key: 'categories', type: 'list' },
+    { key: 'keywords', type: 'list' },
+    { key: 'description', type: 'str' },
+    { key: 'top_img', type: 'img' },
+    { key: 'cover', type: 'img' },
+    { key: 'comments', type: 'bool' },
+    { key: 'toc', type: 'bool' },
+    { key: 'toc_number', type: 'bool' },
+    { key: 'toc_style_simple', type: 'bool' },
+    { key: 'copyright', type: 'bool' },
+    { key: 'copyright_author', type: 'str' },
+    { key: 'copyright_author_href', type: 'str' },
+    { key: 'copyright_url', type: 'str' },
+    { key: 'copyright_info', type: 'str' },
+    { key: 'aside', type: 'bool' },
+    { key: 'mathjax', type: 'bool' },
+    { key: 'katex', type: 'bool' },
+    { key: 'highlight_shrink', type: 'bool' },
+    { key: 'aplayer', type: 'bool' },
+    { key: 'swiper_index', type: 'num' },
+    { key: 'top_group_index', type: 'num' },
+    { key: 'background', type: 'str' },
+  ];
+
+  const TYPE = {};
+  FIELDS.forEach((f) => { TYPE[f.key] = f.type; });
+
+  const META_ONLY = ['title', 'date', 'tags', 'categories']; // 顶部 meta 栏里的四个
+
+  function unquote(raw) {
+    const t = String(raw == null ? '' : raw).trim();
+    if (t.length >= 2 && t[0] === '"' && t[t.length - 1] === '"') {
+      try { return JSON.parse(t); } catch { return t.slice(1, -1); }
+    }
+    if (t.length >= 2 && t[0] === "'" && t[t.length - 1] === "'") return t.slice(1, -1).replace(/''/g, "'");
+    return t;
+  }
+
+  function toList(text) {
+    const t = String(text || '').trim();
+    if (!t) return [];
+    const body = /^\[[\s\S]*\]$/.test(t) ? t.slice(1, -1) : t;
+    return body.split(',').map((s) => unquote(s)).filter((s) => s !== '');
+  }
+
+  /** 原始文本 → JS 值；undefined 表示「这个字段没设置」 */
+  function coerce(key, raw) {
+    const type = TYPE[key];
+    const t = String(raw == null ? '' : raw).trim();
+    if (t === '') return undefined;
+
+    if (type === 'list') return toList(t);
+    if (type === 'bool') {
+      const v = unquote(t).toLowerCase();
+      if (['true', 'yes', 'on'].includes(v)) return true;
+      if (['false', 'no', 'off'].includes(v)) return false;
+      return undefined;
+    }
+    if (type === 'num') {
+      const n = Number(unquote(t));
+      return Number.isFinite(n) ? n : undefined;
+    }
+    if (type === 'img') {
+      const v = unquote(t);
+      if (/^(true|false)$/i.test(v)) return v.toLowerCase() === 'true'; // cover: false 合法
+      return v;
+    }
+    return unquote(t);
+  }
 
   function parseFrontMatter(text) {
-    const m = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*\r?\n?/.exec(text);
-    if (!m) return { data: {}, extras: '', body: text };
+    const src = String(text || '').replace(/^\uFEFF/, ''); // 有些编辑器会写 BOM，Hexo 不在意，这里直接吃掉
 
-    const lines = m[1].split(/\r?\n/);
+    let m = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*\r?\n?/.exec(src);
+    let block = m ? m[1] : null;
+    let rest = m ? src.slice(m[0].length) : null;
+
+    if (!m) {
+      // 兼容缺了开头 --- 的旧文件（首行就是 title: …）：只在首行像 key: value
+      // 且前 60 行内有独立 --- 行时才这么认，避免把普通文章的 --- 分隔线当 front-matter
+      const lines = src.split(/\r?\n/);
+      if (/^[A-Za-z_][\w-]*\s*:/.test(lines[0] || '')) {
+        const end = lines.findIndex((l, i) => i > 0 && i < 60 && /^---[ \t]*$/.test(l));
+        if (end > 0) {
+          block = lines.slice(0, end).join('\n');
+          rest = lines.slice(end + 1).join('\n');
+        }
+      }
+    }
+    if (block === null) return { data: {}, extras: '', order: [], body: src };
+
+    const lines = block.split(/\r?\n/);
     const data = {};
+    const order = [];
     const extras = [];
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const kv = /^([A-Za-z_][\w-]*)\s*:\s*(.*)$/.exec(line);
-      if (!kv) { extras.push(line); continue; }
+      if (!kv || !(kv[1] in TYPE)) { extras.push(line); continue; }
 
       const key = kv[1];
-      let value = kv[2].trim();
+      const rest2 = kv[2].trim();
 
-      if (!KNOWN.includes(key)) { extras.push(line); continue; }
-
-      if (value === '' && /^\s*-\s+/.test(lines[i + 1] || '')) {
+      // 块状列表：key: 换行后跟 " - item"
+      if (rest2 === '' && /^\s*-\s+/.test(lines[i + 1] || '')) {
         const arr = [];
         while (i + 1 < lines.length && /^\s*-\s+/.test(lines[i + 1])) {
           i++;
-          arr.push(lines[i].replace(/^\s*-\s+/, '').replace(/^['"]|['"]$/g, '').trim());
+          arr.push(unquote(lines[i].replace(/^\s*-\s+/, '')));
         }
-        data[key] = arr;
+        const list = arr.filter((s) => s !== '');
+        if (list.length) data[key] = list;
+        if (!order.includes(key)) order.push(key);
         continue;
       }
 
-      if (/^\[.*\]$/.test(value)) {
-        value = value.slice(1, -1).split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
-      } else {
-        value = value.replace(/^['"]|['"]$/g, '');
-      }
-      data[key] = value;
+      const v = coerce(key, rest2);
+      if (v !== undefined) data[key] = v;
+      if (!order.includes(key)) order.push(key);
     }
 
-    // 去掉首尾空行
     while (extras.length && !extras[0].trim()) extras.shift();
     while (extras.length && !extras[extras.length - 1].trim()) extras.pop();
 
-    return { data, extras: extras.join('\n'), body: text.slice(m[0].length) };
+    return { data, extras: extras.join('\n'), order, body: rest };
   }
 
-  function buildFrontMatter() {
-    const out = ['---'];
-    out.push(`title: ${JSON.stringify(el.title.value.trim() || '无标题')}`);
+  const quoteStr = (s) => JSON.stringify(String(s)); // 一律双引号：中文、冒号、# 都安全
 
-    // 日期：没改动就保留文件里原来的写法（可能带时分秒，影响 Hexo 排序）
-    const day = el.date.value || todayValue();
-    let stamp = `${day} 00:00:00`;
-    const raw = String(state.dateRaw || '');
-    if (raw && raw.slice(0, 10).replace(/\//g, '-') === day) stamp = raw;
-    out.push(`date: "${stamp}"`);
+  function scalarLine(key, value) {
+    const type = TYPE[key];
+    if (type === 'bool' || type === 'img') {
+      if (value === false || value === 'false') return 'false';
+      if (value === true || value === 'true') return 'true';
+    }
+    if (type === 'num') {
+      const n = Number(value);
+      return Number.isFinite(n) ? String(n) : null;
+    }
+    return quoteStr(value);
+  }
 
-    const tags = el.tags.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
-    if (tags.length) out.push(`tags: [${tags.map((t) => JSON.stringify(t)).join(', ')}]`);
-    const cats = el.categories.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
-    if (cats.length) out.push(`categories: [${cats.map((c) => JSON.stringify(c)).join(', ')}]`);
-    if (state.extras) out.push(state.extras);
+  function buildFrontMatter(data, extras, order) {
+    const d = data || {};
+    const lines = [];
+    const seen = new Set();
+
+    const push = (key, value) => {
+      if (seen.has(key)) return;
+      seen.add(key);
+      if (Array.isArray(value)) {
+        const arr = value.map((x) => String(x).trim()).filter(Boolean);
+        if (arr.length) lines.push(`${key}: [${arr.map(quoteStr).join(', ')}]`);
+        return;
+      }
+      if (value === undefined || value === null || value === '') return;
+      const s = scalarLine(key, value);
+      if (s === null) return;
+      lines.push(`${key}: ${s}`);
+    };
+
+    push('title', d.title || '无标题');
+    push('date', d.date || '');
+
+    // 先按原文件顺序，再补上新增字段（字段表顺序）
+    const rest = [];
+    (order || []).forEach((k) => {
+      if (k in TYPE && k !== 'title' && k !== 'date' && !rest.includes(k)) rest.push(k);
+    });
+    FIELDS.forEach((f) => {
+      if (f.key !== 'title' && f.key !== 'date' && !rest.includes(f.key)) rest.push(f.key);
+    });
+    rest.forEach((k) => push(k, d[k]));
+
+    const out = ['---'].concat(lines);
+    const extra = String(extras || '').trim();
+    if (extra) out.push(extra);
     out.push('---');
     return out.join('\n');
   }
 
+  /* --------------------- front-matter ↔ 界面 --------------------- */
+
+  function fmEl(key) {
+    if (key === 'title') return el.title;
+    if (key === 'date') return el.date;
+    if (key === 'tags') return el.tags;
+    if (key === 'categories') return el.categories;
+    return $(`[data-fm="${key}"]`);
+  }
+
+  const splitList = (v) => String(v || '').split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+  const asList = (v) => (Array.isArray(v) ? v : v === undefined || v === null || v === '' ? [] : [String(v)]);
+
+  function currentStamp() {
+    const day = el.date.value || todayValue();
+    const raw = String(state.dateRaw || '');
+    if (raw && raw.slice(0, 10).replace(/\//g, '-') === day) return raw; // 没改日期就保留原时分秒
+    return `${day} 00:00:00`;
+  }
+
+  function collectFields() {
+    const d = { title: el.title.value.trim() || '无标题', date: currentStamp() };
+
+    const tags = splitList(el.tags.value);
+    if (tags.length) d.tags = tags;
+    const cats = splitList(el.categories.value);
+    if (cats.length) d.categories = cats;
+
+    for (const f of FIELDS) {
+      if (META_ONLY.includes(f.key)) continue;
+      const node = fmEl(f.key);
+      if (!node) continue;
+      const raw = String(node.value || '').trim();
+      if (raw === '') continue;
+
+      if (f.type === 'bool') d[f.key] = raw === 'true';
+      else if (f.type === 'num') {
+        const n = Number(raw);
+        if (Number.isFinite(n)) d[f.key] = n;
+      } else if (f.type === 'list') {
+        const arr = splitList(raw);
+        if (arr.length) d[f.key] = arr;
+      } else if (f.type === 'img') {
+        d[f.key] = /^(true|false)$/i.test(raw) ? raw.toLowerCase() === 'true' : raw;
+      } else {
+        d[f.key] = raw;
+      }
+    }
+    return d;
+  }
+
+  function applyFields(data) {
+    const d = data || {};
+    el.title.value = d.title || '';
+
+    const stamp = String(d.date || '');
+    state.dateRaw = stamp;
+    const m = /(\d{4})[-/](\d{1,2})[-/](\d{1,2})/.exec(stamp);
+    el.date.value = m ? `${m[1]}-${pad2(m[2])}-${pad2(m[3])}` : todayValue();
+
+    el.tags.value = asList(d.tags).join(', ');
+    el.categories.value = asList(d.categories).join(', ');
+
+    for (const f of FIELDS) {
+      if (META_ONLY.includes(f.key)) continue;
+      const node = fmEl(f.key);
+      if (!node) continue;
+      const v = d[f.key];
+      if (f.type === 'bool') node.value = v === true ? 'true' : v === false ? 'false' : '';
+      else if (Array.isArray(v)) node.value = v.join(', ');
+      else node.value = v === undefined || v === null ? '' : String(v);
+    }
+
+    syncThumbs();
+    paintAttrCount();
+  }
+
   function composeDoc() {
     const body = el.editor.value.replace(/\s+$/, '');
-    return `${buildFrontMatter()}\n${body}\n`;
+    return `${buildFrontMatter(collectFields(), state.extras, state.order)}\n${body}\n`;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* 文章属性面板                                                      */
+  /* ---------------------------------------------------------------- */
+
+  function syncThumb(key) {
+    const node = fmEl(key);
+    const img = el.attrPanel?.querySelector(`[data-thumb="${key}"]`);
+    if (!node || !img) return;
+    const v = String(node.value || '').trim();
+    if (/^https?:\/\//i.test(v)) {
+      if (img.getAttribute('src') !== v) img.src = v;
+      img.hidden = false;
+    } else {
+      img.removeAttribute('src');
+      img.hidden = true;
+    }
+  }
+
+  function syncThumbs() {
+    syncThumb('cover');
+    syncThumb('top_img');
+  }
+
+  function paintAttrCount() {
+    if (!el.attrCount) return;
+    const d = collectFields();
+    const keys = Object.keys(d).filter((k) => !META_ONLY.includes(k));
+    el.attrCount.textContent = String(keys.length);
+    el.attrCount.hidden = keys.length === 0;
+    el.attrCount.className = 'pill ' + (keys.length ? 'ok' : 'idle');
+
+    const bits = [];
+    if (d.cover) bits.push('封面');
+    if (d.top_img) bits.push('顶部图');
+    if (d.description) bits.push('摘要');
+    if (d.swiper_index) bits.push('轮播 #' + d.swiper_index);
+    if (d.top_group_index) bits.push('推荐 #' + d.top_group_index);
+    if (d.copyright === false) bits.push('无版权块');
+    if (d.toc === false) bits.push('无目录');
+    if (el.attrSummary) el.attrSummary.textContent = bits.join(' · ');
+  }
+
+  function setAttrOpen(open) {
+    if (!el.attrPanel) return;
+    el.attrPanel.hidden = !open;
+    el.btnAttr.setAttribute('aria-expanded', open ? 'true' : 'false');
+    el.btnAttr.classList.toggle('open', open);
+    localStorage.setItem(LS.attr, open ? '1' : '0');
+  }
+
+  async function uploadToField(file, key) {
+    const label = key === 'cover' ? '封面' : '顶部图';
+    const handle = toast(`上传${label}…`, 'busy');
+    try {
+      const data = await uploadOne(file);
+      const node = fmEl(key);
+      if (node) node.value = data.url;
+      syncThumb(key);
+      paintAttrCount();
+      markDirty();
+      updateToast(handle, `${data.elapsed ? (data.elapsed / 1000).toFixed(1) + 's · ' : ''}已设为${label}`, 'ok');
+    } catch (err) {
+      updateToast(handle, err.message, 'error');
+      if (err.needConfig) openSettings();
+    }
+  }
+
+  function genDescription() {
+    const text = el.editor.value
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/<!--[\s\S]*?-->/g, ' ')
+      .replace(/^\s*#{1,6}\s+/gm, '')
+      .replace(/[>*_`~|#-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!text) { toast('正文还是空的，先写点东西', 'error'); return; }
+    const node = fmEl('description');
+    if (!node) return;
+    node.value = text.slice(0, 120) + (text.length > 120 ? '…' : '');
+    paintAttrCount();
+    markDirty();
+    toast('摘要已生成，可以再改', 'ok');
   }
 
   /* ---------------------------------------------------------------- */
@@ -342,6 +636,7 @@
     table: () =>
       insertText('| 列 1 | 列 2 | 列 3 |\n| --- | --- | --- |\n| 内容 | 内容 | 内容 |', { block: true }),
     hr: () => insertText('---', { block: true }),
+    more: () => insertText('<!-- more -->', { block: true }),
   };
 
   /* ---------------------------------------------------------------- */
@@ -473,19 +768,14 @@
   }
 
   function applyDoc(name, text) {
-    const { data, extras, body } = parseFrontMatter(text);
+    const { data, extras, order, body } = parseFrontMatter(text);
     state.current = name;
     state.extras = extras;
+    state.order = order;
 
-    el.title.value = data.title || (name || '').replace(/\.md$/i, '');
     el.filename.value = name || '';
-    el.tags.value = Array.isArray(data.tags) ? data.tags.join(', ') : data.tags || '';
-    el.categories.value = Array.isArray(data.categories) ? data.categories.join(', ') : data.categories || '';
-
-    const d = String(data.date || '');
-    state.dateRaw = d;
-    const m = /(\d{4})[-/](\d{1,2})[-/](\d{1,2})/.exec(d);
-    el.date.value = m ? `${m[1]}-${pad2(m[2])}-${pad2(m[3])}` : todayValue();
+    applyFields(data);
+    if (!el.title.value) el.title.value = (name || '').replace(/\.md$/i, '');
 
     el.editor.value = body.replace(/^\s*\n/, '');
     renderPreview();
@@ -511,13 +801,12 @@
     if (!confirmDiscard()) return;
     state.current = null;
     state.extras = '';
+    state.order = [];
     state.dateRaw = '';
     el.title.value = '';
     el.filename.value = '';
-    el.tags.value = '';
-    el.categories.value = '';
-    el.date.value = todayValue();
     el.editor.value = '';
+    applyFields({ date: `${todayValue()} 00:00:00` });
     el.editor.focus();
     renderPreview();
     updateStats();
@@ -577,11 +866,10 @@
       localStorage.setItem(
         LS.draft,
         JSON.stringify({
+          v: 2,
           name: state.current,
-          title: el.title.value,
-          tags: el.tags.value,
-          categories: el.categories.value,
-          date: el.date.value,
+          fields: collectFields(),
+          order: state.order,
           extras: state.extras,
           dateRaw: state.dateRaw,
           body: el.editor.value,
@@ -608,12 +896,20 @@
       ev.stopPropagation();
       state.current = draft.name || null;
       state.extras = draft.extras || '';
+      state.order = Array.isArray(draft.order) ? draft.order : [];
       state.dateRaw = draft.dateRaw || '';
-      el.title.value = draft.title || '';
       el.filename.value = draft.name || '';
-      el.tags.value = draft.tags || '';
-      el.categories.value = draft.categories || '';
-      el.date.value = draft.date || todayValue();
+
+      if (draft.fields && typeof draft.fields === 'object') {
+        applyFields(draft.fields);
+      } else {
+        // 旧格式草稿
+        el.title.value = draft.title || '';
+        el.tags.value = draft.tags || '';
+        el.categories.value = draft.categories || '';
+        el.date.value = draft.date || todayValue();
+      }
+
       el.editor.value = draft.body;
       renderPreview();
       updateStats();
@@ -822,10 +1118,64 @@
     });
     [el.tags, el.categories, el.date].forEach((input) => input.addEventListener('input', markDirty));
 
-    // 上传
-    $('#btn-upload').addEventListener('click', () => el.fileInput.click());
+    // 文章属性面板
+    el.btnAttr.addEventListener('click', () => setAttrOpen(!!el.attrPanel.hidden));
+    el.attrPanel.addEventListener('input', (e) => {
+      const key = e.target.dataset?.fm;
+      if (!key) return;
+      markDirty();
+      if (key === 'cover' || key === 'top_img') syncThumb(key);
+      paintAttrCount();
+    });
+    el.attrPanel.addEventListener('change', (e) => {
+      const key = e.target.dataset?.fm;
+      if (!key) return;
+      markDirty();
+      paintAttrCount();
+    });
+    el.attrPanel.addEventListener('click', (e) => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+
+      if (btn.dataset.pick) {
+        state.pickTarget = btn.dataset.pick;
+        el.fileInput.click();
+        return;
+      }
+      if (btn.dataset.clear) {
+        const key = btn.dataset.clear;
+        const node = fmEl(key);
+        if (node) node.value = '';
+        syncThumb(key);
+        paintAttrCount();
+        markDirty();
+        return;
+      }
+      if (btn.dataset.copyTo) {
+        const from = fmEl(btn.dataset.from);
+        const to = fmEl(btn.dataset.copyTo);
+        if (from && to) {
+          to.value = from.value;
+          syncThumb(btn.dataset.copyTo);
+          paintAttrCount();
+          markDirty();
+        }
+        return;
+      }
+      if (btn.id === 'btn-gen-desc') genDescription();
+    });
+
+    // 上传（工具栏按钮 / 属性面板里的「上传」）
+    $('#btn-upload').addEventListener('click', () => {
+      state.pickTarget = null;
+      el.fileInput.click();
+    });
     el.fileInput.addEventListener('change', () => {
-      handleFiles(el.fileInput.files);
+      const files = el.fileInput.files;
+      const target = state.pickTarget;
+      state.pickTarget = null;
+      if (target && files[0]) uploadToField(files[0], target);
+      else handleFiles(files);
       el.fileInput.value = '';
     });
 
@@ -955,6 +1305,7 @@
     }
 
     bind();
+    setAttrOpen(localStorage.getItem(LS.attr) === '1');
     renderPreview();
     offerDraftRestore();
   }
