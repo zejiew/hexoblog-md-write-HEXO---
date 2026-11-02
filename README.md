@@ -416,3 +416,10 @@ node test/fm-roundtrip.js "D:\my-blog\source\_posts"
 ## License
 
 [MIT](LICENSE)
+
+最终效果如下：<img width="1920" height="1030" alt="ScreenShot_2026-11-03_062758_784" src="https://github.com/user-attachments/assets/42f31a27-865a-43c9-8c88-bc831b9f8303" />
+<img width="795" height="610" alt="ScreenShot_2026-11-03_071342_698" src="https://github.com/user-attachments/assets/22f7a6d6-c250-40fd-906d-d1b1d2accaf8" />
+<img width="1910" height="925" alt="ScreenShot_2026-11-03_070839_654" src="https://github.com/user-attachments/assets/b455391c-1dab-4cdd-8a46-5e2d811cf52b" />
+<img width="1223" height="639" alt="ScreenShot_2026-11-03_062820_455" src="https://github.com/user-attachments/assets/e23575ce-caed-448d-b1c2-07f7e00d8abd" />
+
+
